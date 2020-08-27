@@ -1,14 +1,20 @@
 import configparser
+import curses
+import datetime
 import os
 import socket
+import threading
+from time import sleep
 from zlib import compress, decompress
 
+import ui
+
+screen=None
 from Crypto.Signature import pss
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import RSA
 
 indent = 0
-
 
 def register(name):
     global indent
@@ -72,10 +78,49 @@ def get_messages():
     out.append((indent) & 0xFF)
     return out
 
+def _start_curses():
+    global screen
+    screen = curses.initscr()
+    curses.cbreak()
+    screen.keypad(1)
+
+def redraw():
+    screen.refresh()
+    history.redraw()
+    title.redraw()
+    prompt.redraw()
+def updater():
+    while True:
+        messes = send(get_messages()).decode('utf-8')
+        if messes.count(':') > 0:
+            messes = messes.split('\n')
+
+            for i in messes:
+                recid = i[:i.index(':')]
+                text = i[i.index(':') + 1:]
+                try:
+                    usr = users_dict[int(recid)]
+                except KeyError:
+                    usr = "UNK"
+                msg = ui.Message(datetime.datetime.now(), usr, text)
+
+                history.append(msg)
+        history.redraw()
+        sleep(3)
+_start_curses()
+layout = ui.Layout()
+title   = ui.Title(layout, screen)
+history = ui.History(layout, screen)
+prompt  = ui.Prompt(layout, screen)
+
+redraw()
 
 if not (os.path.exists("config.cfg") and os.path.exists("op.Key") and os.path.exists("pr.Key")):
-    print("Enter your name:")
-    nam = input()
+    history.append(ui.Message(datetime.datetime.now(),"Введи имя",""))
+    history.redraw()
+    nam = prompt.getstr().decode('utf-8')
+    history.messages=[]
+    history.redraw()
     config = configparser.ConfigParser()
     config.add_section("Chat")
     config.set("Chat", "username", nam)
@@ -89,16 +134,39 @@ if (os.path.exists("config.cfg") and os.path.exists("op.Key") and os.path.exists
     config.read("config.cfg")
     name = config["Chat"]["username"]
     indent = int(config["Chat"]["id"])
-    while True:
-        print("Chose:\n\t1-write message\n\t2-give messages")
-        choise = int(input())
-        if choise == 1:
-            print(f"Chose reciever:\n{send(get_users()).decode('utf-8')}")
-            rec_id = int(input())
-            print("Enter text:")
-            text = input()
-            if send(send_message(indent, rec_id, False, text.encode('utf-8'))) != b'ERROR':
-                print("Suck")
-                continue
-        if choise == 2:
-            print(send(get_messages()).decode('utf-8'))
+
+
+
+
+
+    history.messages=[]
+    users = send(get_users()).decode('utf-8').strip()
+    users_dict = {}
+    for i in users.split('\n'):
+        users_dict.update({int(i.strip().split(':')[0]): i.strip().split(':')[1]})
+    for i in users_dict:
+        history.append(ui.Message(datetime.datetime.now(),"ВЫБИРАЙ",f"{i}: {users_dict[i]}"))
+        history.redraw()
+    try:
+        to=int(prompt.getstr().decode('utf-8'))
+    except Exception:
+        to = int(prompt.getstr().decode('utf-8'))
+    history.messages=[]
+    history.redraw()
+    t = threading.Thread(target=updater)
+    t.start()
+while True:
+        redraw()
+        text = prompt.getstr()
+        if text == b'':
+            continue
+        if text == b'/quit':
+            break
+        send(send_message(indent, to, False, text))
+        now = datetime.datetime.now()
+        msg = ui.Message(now, "ME", text)
+        history.append(msg)
+
+        history.redraw()
+        prompt.reset()
+
